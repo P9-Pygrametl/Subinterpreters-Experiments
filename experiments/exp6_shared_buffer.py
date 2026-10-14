@@ -115,7 +115,7 @@ class InterpreterShareSession:
         for thread in threads:
             thread.start()
         for thread in threads:
-            thread.join(300)
+            thread.join()
         return sum(results)
 
     def stop(self) -> None:
@@ -169,7 +169,7 @@ def main() -> None:
     RAW_BYTES = data.tobytes()
     SHARED_MEMORY = shared_memory_module.SharedMemory(create=True,
                                                       size=len(RAW_BYTES))
-    SHARED_MEMORY.buf[:] = RAW_BYTES
+    SHARED_MEMORY.buf[:len(RAW_BYTES)] = RAW_BYTES
 
     records = []
     try:
