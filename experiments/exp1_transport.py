@@ -36,12 +36,10 @@ def make_payload(kind: str, size: int) -> tuple[object, int]:
         return "x" * size, size
     if kind == "bytes":
         return b"x" * size, size
-    if kind == "tuple":
+    if kind in ("tuple", "list"):
         n = max(1, size // 8)
-        return tuple(range(n)), n * 8
-    if kind == "list":
-        n = max(1, size // 8)
-        return list(range(n)), n * 8
+        payload = tuple(range(n)) if kind == "tuple" else list(range(n))
+        return payload, n * 8
     if kind == "dict":
         n = max(1, size // 16)
         return {f"k{i}": i for i in range(n)}, n * 16
@@ -60,26 +58,19 @@ def _pipe_consumer(connection: Any, done: metrics.Queue, n: int) -> None:
     done.put(1)
 
 
-def _interpreter_consumer(queue: metrics.Queue, done: metrics.Queue,
-                          n: int) -> None:
-    for _ in range(n):
-        queue.get()
-    done.put(1)
-
-
 # --- per-transport setup/transfer/teardown ---------------------------------
 def setup_interp_queue(payload: object, n: int) -> tuple[Callable[[], int], Callable[[], None]]:
     queue, done = ci.create_queue(), ci.create_queue()
     interpreter = ci.create()
-    worker = interpreter.call_in_thread(_interpreter_consumer, queue, done, n)
+    worker = interpreter.call_in_thread(_queue_consumer, queue, done, n)
 
-    def transfer():
+    def transfer() -> int:
         for _ in range(n):
             queue.put(payload)
         done.get(timeout=300)
         return n
 
-    def teardown():
+    def teardown() -> None:
         worker.join(300)
         interpreter.close()
 
@@ -91,13 +82,13 @@ def setup_mp_queue(payload: object, n: int) -> tuple[Callable[[], int], Callable
     worker = CTX.Process(target=_queue_consumer, args=(queue, done, n))
     worker.start()
 
-    def transfer():
+    def transfer() -> int:
         for _ in range(n):
             queue.put(payload)
         done.get(timeout=300)
         return n
 
-    def teardown():
+    def teardown() -> None:
         worker.join(300)
 
     return transfer, teardown
@@ -109,13 +100,13 @@ def setup_mp_pipe(payload: object, n: int) -> tuple[Callable[[], int], Callable[
     worker = CTX.Process(target=_pipe_consumer, args=(receiver, done, n))
     worker.start()
 
-    def transfer():
+    def transfer() -> int:
         for _ in range(n):
             sender.send(payload)
         done.get(timeout=300)
         return n
 
-    def teardown():
+    def teardown() -> None:
         worker.join(300)
 
     return transfer, teardown
@@ -127,7 +118,7 @@ SETUPS = {"interp_queue": setup_interp_queue, "mp_queue": setup_mp_queue,
 
 def measure_once(transport: str, kind: str, size: str) -> dict:
     payload, payload_bytes = make_payload(kind, SIZES[size])
-    n = max(50, min(20000, TARGET_BYTES // max(1, payload_bytes)))
+    n = max(50, min(20_000, TARGET_BYTES // payload_bytes))
 
     # Memory: one separate, untimed pass.
     transfer, teardown = SETUPS[transport](payload, n)

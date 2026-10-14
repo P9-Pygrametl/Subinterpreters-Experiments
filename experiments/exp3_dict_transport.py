@@ -42,18 +42,11 @@ def _pipe_consumer(connection: Any, done: metrics.Queue, n: int) -> None:
     done.put(1)
 
 
-def _interpreter_consumer(queue: metrics.Queue, done: metrics.Queue,
-                          n: int) -> None:
-    for _ in range(n):
-        queue.get()
-    done.put(1)
-
-
 # --- per-transport setup/transfer/teardown ---------------------------------
 def setup_interp_queue(payload: object, n: int) -> tuple[Callable[[], int], Callable[[], None]]:
     queue, done = ci.create_queue(), ci.create_queue()
     interpreter = ci.create()
-    worker = interpreter.call_in_thread(_interpreter_consumer, queue, done, n)
+    worker = interpreter.call_in_thread(_queue_consumer, queue, done, n)
 
     def transfer():
         for _ in range(n):
@@ -62,7 +55,11 @@ def setup_interp_queue(payload: object, n: int) -> tuple[Callable[[], int], Call
         return n
 
     def teardown():
-        worker.join(300)
+        worker.join(timeout=300)
+
+        if worker.is_alive():
+            raise RuntimeError("Subinterpreter worker failed to stop")
+
         interpreter.close()
 
     return transfer, teardown
@@ -80,7 +77,21 @@ def setup_mp_queue(payload: object, n: int) -> tuple[Callable[[], int], Callable
         return n
 
     def teardown():
-        worker.join(300)
+        worker.join(timeout=300)
+
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(timeout=5)
+
+            if worker.is_alive():
+                worker.kill()
+                worker.join()
+
+            raise RuntimeError("Worker process failed to stop")
+
+        worker.close()
+        queue.close()
+        done.close()
 
     return transfer, teardown
 
@@ -98,7 +109,22 @@ def setup_mp_pipe(payload: object, n: int) -> tuple[Callable[[], int], Callable[
         return n
 
     def teardown():
-        worker.join(300)
+        worker.join(timeout=300)
+
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(timeout=5)
+
+            if worker.is_alive():
+                worker.kill()
+                worker.join()
+
+            raise RuntimeError("Worker process failed to stop")
+
+        worker.close()
+        sender.close()
+        receiver.close()
+        done.close()
 
     return transfer, teardown
 
@@ -113,14 +139,19 @@ def measure_once(transport: str, columns: int) -> dict:
 
     # Memory: one separate, untimed pass.
     transfer, teardown = SETUPS[transport](payload, n)
-    mem_avg, mem_max = metrics.memory_over(transfer)
-    teardown()
+    try:
+        mem_avg, mem_max = metrics.memory_over(transfer)
+    finally:
+        teardown()
 
     transfer_walls, cpu_times, correct = [], [], []
     for _ in range(REPEATS):
         transfer, teardown = SETUPS[transport](payload, n)
-        wall, cpu, received = metrics.timed(transfer)
-        teardown()
+        try:
+            wall, cpu, received = metrics.timed(transfer)
+        finally:
+            teardown()
+
         transfer_walls.append(wall)
         cpu_times.append(cpu)
         correct.append(received == n)

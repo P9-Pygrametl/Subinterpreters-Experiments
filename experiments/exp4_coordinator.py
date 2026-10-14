@@ -106,10 +106,32 @@ class CoordinatorProcesses:
     def stop(self) -> None:
         for i in range(self.workers):
             self.controls[i].put(None)
+
         for process in self.processes:
-            process.join(600)
+            process.join(timeout=600)
+
         self.requests.put("STOP")
-        self.owner.join(600)
+        self.owner.join(timeout=600)
+
+        timed_out = False
+
+        for process in [*self.processes, self.owner]:
+            if process.is_alive():
+                timed_out = True
+                process.terminate()
+                process.join(timeout=5)
+
+                if process.is_alive():
+                    process.kill()
+                    process.join()
+
+            process.close()
+
+        for queue in [self.requests, *self.replies, *self.controls, *self.dones]:
+            queue.close()
+
+        if timed_out:
+            raise RuntimeError("One or more coordinator processes failed to stop")
 
 
 class CoordinatorInterpreters:
@@ -142,12 +164,22 @@ class CoordinatorInterpreters:
     def stop(self) -> None:
         for i in range(self.workers):
             self.controls[i].put(None, _delay=self.delay)
+
         for thread in self.threads:
-            thread.join(600)
+            thread.join(timeout=600)
+
+        if any(thread.is_alive() for thread in self.threads):
+            raise RuntimeError("One or more interpreter workers failed to stop")
+
         for interpreter in self.interpreters:
             interpreter.close()
+
         self.requests.put("STOP", _delay=self.delay)
-        self.owner_thread.join(600)
+        self.owner_thread.join(timeout=600)
+
+        if self.owner_thread.is_alive():
+            raise RuntimeError("Coordinator interpreter failed to stop")
+
         self.owner.close()
 
 
@@ -167,15 +199,17 @@ def main() -> None:
         for name in order:
             session = MECHANISMS[name](workers)
 
-            warm_sum = session.round()  # warm + correctness check
-            ok = warm_sum == EXPECTED_SUM
-            mem_avg, mem_max = metrics.memory_over(session.round)  # untimed pass
-            round_walls, cpu_total = [], 0.0
-            for _ in range(ROUNDS):
-                wall, cpu, _ = metrics.timed(session.round)
-                round_walls.append(wall)
-                cpu_total += cpu
-            session.stop()
+            try:
+                warm_sum = session.round()
+                ok = warm_sum == EXPECTED_SUM
+                mem_avg, mem_max = metrics.memory_over(session.round)
+                round_walls, cpu_total = [], 0.0
+                for _ in range(ROUNDS):
+                    wall, cpu, _ = metrics.timed(session.round)
+                    round_walls.append(wall)
+                    cpu_total += cpu
+            finally:
+                session.stop()
 
             round_summary = metrics.summarize(round_walls)
             records.append({"mechanism": name, "workers": workers,

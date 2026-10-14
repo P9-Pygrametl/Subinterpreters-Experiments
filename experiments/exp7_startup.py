@@ -33,8 +33,17 @@ def teardown_processes(processes: list[mp.Process]) -> tuple[float, bool]:
     start = time.perf_counter()
     for process in processes:
         process.join(60)
-    return (time.perf_counter() - start,
-            all(process.exitcode == 0 for process in processes))
+
+    elapsed = time.perf_counter() - start
+    ok = all(process.exitcode == 0 for process in processes)
+
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+            process.join()
+        process.close()
+
+    return elapsed, ok
 
 
 def create_interpreters(workers: int) -> tuple[list[Any], float]:
