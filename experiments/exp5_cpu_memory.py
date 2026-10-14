@@ -54,19 +54,23 @@ def run_parallel_steady(
     mechanism: str, workers: int, items: list[tuple[dict, int]]
 ) -> tuple[list[float], float, float, float, bool]:
     executor = make_pool(mechanism, workers)
-    list(executor.map(process_row, items, chunksize=CHUNKSIZE))  # warm
-    output = list(executor.map(process_row, items, chunksize=CHUNKSIZE))
-    expected = process_row(({"i": -1, "value": 0}, WORK))["value"]
-    ok = len(output) == NROWS and all(row["value"] == expected for row in output)
-    mem_avg, mem_max = metrics.memory_over(
-        lambda: list(executor.map(process_row, items, chunksize=CHUNKSIZE)))
-    wall_times, cpu_total = [], 0.0
-    for _ in range(STEADY_REPS):
-        wall, cpu, _ = metrics.timed(
+
+    try:
+        list(executor.map(process_row, items, chunksize=CHUNKSIZE))  # warm
+        output = list(executor.map(process_row, items, chunksize=CHUNKSIZE))
+        expected = process_row(({"i": -1, "value": 0}, WORK))["value"]
+        ok = len(output) == NROWS and all(row["value"] == expected for row in output)
+        mem_avg, mem_max = metrics.memory_over(
             lambda: list(executor.map(process_row, items, chunksize=CHUNKSIZE)))
-        wall_times.append(wall)
-        cpu_total += cpu
-    executor.shutdown()
+        wall_times, cpu_total = [], 0.0
+        for _ in range(STEADY_REPS):
+            wall, cpu, _ = metrics.timed(
+                lambda: list(executor.map(process_row, items, chunksize=CHUNKSIZE)))
+            wall_times.append(wall)
+            cpu_total += cpu
+    finally:
+        executor.shutdown()
+
     return wall_times, cpu_total, mem_avg, mem_max, ok
 
 

@@ -104,18 +104,27 @@ class InterpreterShareSession:
 
     def round(self) -> int:
         results = [0] * self.workers
+        errors = [None] * self.workers
 
         def work(index):
-            results[index] = self.interpreters[index].call(
-                _interpreter_chunk,
-                (self.buffer, index, self.workers, CHUNKS, CHUNK, N))
+            try:
+                results[index] = self.interpreters[index].call(
+                    _interpreter_chunk,
+                    (self.buffer, index, self.workers, CHUNKS, CHUNK, N))
+            except Exception as exc:
+                errors[index] = exc
 
         threads = [threading.Thread(target=work, args=(index,))
-                   for index in range(self.workers)]
+                for index in range(self.workers)]
         for thread in threads:
             thread.start()
         for thread in threads:
             thread.join()
+
+        for error in errors:
+            if error is not None:
+                raise error
+
         return sum(results)
 
     def stop(self) -> None:
@@ -179,15 +188,17 @@ def main() -> None:
             randomizer.shuffle(order)
             for name in order:
                 session = SESSIONS[name](buffer, workers)
-                warm_result = session.round()  # warm + correctness check
-                ok = warm_result == EXPECTED
-                mem_avg, mem_max = metrics.memory_over(session.round)  # untimed
-                round_walls, cpu_total = [], 0.0
-                for _ in range(STEADY_REPS):
-                    wall, cpu, _ = metrics.timed(session.round)
-                    round_walls.append(wall)
-                    cpu_total += cpu
-                session.stop()
+                try:
+                    warm_result = session.round()  # warm + correctness check
+                    ok = warm_result == EXPECTED
+                    mem_avg, mem_max = metrics.memory_over(session.round)  # untimed
+                    round_walls, cpu_total = [], 0.0
+                    for _ in range(STEADY_REPS):
+                        wall, cpu, _ = metrics.timed(session.round)
+                        round_walls.append(wall)
+                        cpu_total += cpu
+                finally:
+                    session.stop()
 
                 records.append({"mechanism": name, "workers": workers,
                                 "steady": metrics.summarize(round_walls),
