@@ -3,4 +3,4 @@ __pycache__/
 results/
 .venv/
 .ruff_cache/
-_*.pdf
+*.pdf

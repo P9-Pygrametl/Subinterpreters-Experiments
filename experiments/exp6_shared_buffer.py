@@ -7,7 +7,6 @@ Workers are reused across rounds; raw rounds are kept.
 Mechanisms:
   interpreters_shared  - interpreters; buffer passed by memoryview  [zero-copy]
   processes_sharedmem  - multiprocessing.shared_memory (attached once) [zero-copy]
-  processes_copy       - buffer pickled to each worker every round  [copies]
 """
 
 import array
@@ -72,25 +71,6 @@ def _shared_memory_round(item: tuple[int, int]) -> int:
 
         for k in range(start, end):
             subtotal += data[k]
-
-        total += subtotal
-
-    return total
-
-
-def _copy_round(item: tuple[bytes, int, int]) -> int:
-    raw, index, worker_count = item
-    values = array.array("q")
-    values.frombytes(raw)
-    total = 0
-
-    for chunk in range(index, CHUNK_COUNT, worker_count):
-        start = chunk * CHUNK_SIZE
-        end = min(start + CHUNK_SIZE, ELEMENT_COUNT)
-        subtotal = 0
-
-        for k in range(start, end):
-            subtotal += values[k]
 
         total += subtotal
 
@@ -188,29 +168,6 @@ class SharedMemorySession:
         self.executor.shutdown()
 
 
-class CopySession:
-    def __init__(self, raw: bytes, worker_count: int) -> None:
-        self.raw = raw
-        self.worker_count = worker_count
-        self.executor = ProcessPoolExecutor(
-            max_workers=worker_count,
-            mp_context=MP_CONTEXT,
-        )
-
-    def round(self) -> int:
-        tasks = [
-            (self.raw, index, self.worker_count)
-            for index in range(self.worker_count)
-        ]
-
-        return sum(
-            self.executor.map(_copy_round, tasks, chunksize=1)
-        )
-
-    def stop(self) -> None:
-        self.executor.shutdown()
-
-
 SESSIONS = {
     "interpreters_shared": lambda buffer, worker_count: InterpreterShareSession(
         buffer, worker_count
@@ -218,24 +175,21 @@ SESSIONS = {
     "processes_sharedmem": lambda buffer, worker_count: SharedMemorySession(
         SHARED_MEMORY.name, worker_count
     ),
-    "processes_copy": lambda buffer, worker_count: CopySession(
-        RAW_BYTES, worker_count
-    ),
 }
 
 
 def main() -> None:
-    global SHARED_MEMORY, RAW_BYTES
+    global SHARED_MEMORY
 
     data = array.array("q", range(ELEMENT_COUNT))
     buffer = memoryview(data)
-    RAW_BYTES = data.tobytes()
+    raw_bytes = data.tobytes()
 
     SHARED_MEMORY = shared_memory_module.SharedMemory(
         create=True,
-        size=len(RAW_BYTES),
+        size=len(raw_bytes),
     )
-    SHARED_MEMORY.buf[:len(RAW_BYTES)] = RAW_BYTES
+    SHARED_MEMORY.buf[:len(raw_bytes)] = raw_bytes
 
     records = []
 
