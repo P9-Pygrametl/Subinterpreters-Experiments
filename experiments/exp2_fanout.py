@@ -3,6 +3,7 @@ collects the results.
 
 Workers are reused across rounds.
 """
+
 import concurrent.interpreters as ci
 import multiprocessing as mp
 import os
@@ -13,39 +14,48 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import metrics
 
-T = 4000        # tasks per round
-WORK = 2000     # tiny computation per task
+
+TASKS_PER_ROUND = 4000
+WORK_PER_TASK = 2000
 ROUNDS = 5
+
 WORKER_COUNTS = [1, 2, 4, 8]
-CTX = mp.get_context("fork")
+
+MP_CONTEXT = mp.get_context("fork")
 
 
-# --- the worker (runs in a process or an interpreter) ----------------------
+# --- Worker (runs in a process or an interpreter) ----------------------
+
 def _fanout_worker(tasks, results, work):
     while True:
         task = tasks.get()
+
         if task == "STOP":
             break
+
         if task == "ROUND":
             results.put("ROUND")
             continue
+
         checksum = 0
+
         for i in range(work):
             checksum = (checksum * 31 + i) % 1000003
+
         results.put((task, checksum))
 
 
 class FanoutBase:
     def round(self) -> int:
-        for task in range(T):
+        for task in range(TASKS_PER_ROUND):
             self.tasks.put(task)
 
-        for _ in range(self.workers):
+        for _ in range(self.worker_count):
             self.tasks.put("ROUND")
 
         received = finished = 0
 
-        while received < T or finished < self.workers:
+        while received < TASKS_PER_ROUND or finished < self.worker_count:
             result = self.results.get(timeout=300)
 
             if result == "ROUND":
@@ -56,24 +66,27 @@ class FanoutBase:
         return received
 
 
-# --- the two mechanisms ----------------------------------------------------
+# --- Multiprocessing ------------------------------------------------------
+
 class FanoutProcesses(FanoutBase):
-    def __init__(self, workers: int) -> None:
-        self.workers = workers
-        self.tasks, self.results = CTX.Queue(), CTX.Queue()
+    def __init__(self, worker_count: int) -> None:
+        self.worker_count = worker_count
+
+        self.tasks, self.results = MP_CONTEXT.Queue(), MP_CONTEXT.Queue()
+
         self.processes = [
-            CTX.Process(
+            MP_CONTEXT.Process(
                 target=_fanout_worker,
-                args=(self.tasks, self.results, WORK),
+                args=(self.tasks, self.results, WORK_PER_TASK),
             )
-            for _ in range(workers)
+            for _ in range(worker_count)
         ]
 
         for process in self.processes:
             process.start()
 
     def stop(self) -> None:
-        for _ in range(self.workers):
+        for _ in range(self.worker_count):
             self.tasks.put("STOP")
 
         for process in self.processes:
@@ -102,22 +115,29 @@ class FanoutProcesses(FanoutBase):
             raise RuntimeError("One or more worker processes failed to stop")
 
 
+# --- Subinterpreters ------------------------------------------------------
+
 class FanoutInterpreters(FanoutBase):
-    def __init__(self, workers: int) -> None:
-        self.workers = workers
+    def __init__(self, worker_count: int) -> None:
+        self.worker_count = worker_count
+
         self.tasks, self.results = ci.create_queue(), ci.create_queue()
         self.interpreters, self.threads = [], []
 
-        for _ in range(workers):
+        for _ in range(worker_count):
             interpreter = ci.create()
             thread = interpreter.call_in_thread(
-                _fanout_worker, self.tasks, self.results, WORK
+                _fanout_worker,
+                self.tasks,
+                self.results,
+                WORK_PER_TASK,
             )
+
             self.interpreters.append(interpreter)
             self.threads.append(thread)
 
     def stop(self) -> None:
-        for _ in range(self.workers):
+        for _ in range(self.worker_count):
             self.tasks.put("STOP")
 
         for thread in self.threads:
@@ -141,27 +161,29 @@ def main() -> None:
     records = []
     randomizer = random.Random(7)
 
-    for workers in WORKER_COUNTS:
+    for worker_count in WORKER_COUNTS:
         order = list(MECHANISMS)
         randomizer.shuffle(order)
 
         for name in order:
             session_class = MECHANISMS[name]
-            session = session_class(workers)
+            session = session_class(worker_count)
 
             try:
                 warm_result = session.round()
-                ok = warm_result == T
+                ok = warm_result == TASKS_PER_ROUND
 
                 mem_avg, mem_max = metrics.memory_over(session.round)
 
-                round_walls, cpu_total = [], 0.0
+                round_walls = []
+                cpu_total = 0.0
 
                 for _ in range(ROUNDS):
                     wall, cpu, received = metrics.timed(session.round)
+
                     round_walls.append(wall)
                     cpu_total += cpu
-                    ok = ok and received == T
+                    ok = ok and received == TASKS_PER_ROUND
             finally:
                 session.stop()
 
@@ -169,7 +191,7 @@ def main() -> None:
 
             records.append({
                 "mechanism": name,
-                "workers": workers,
+                "workers": worker_count,
                 "steady": round_summary,
                 "cpu": cpu_total,
                 "mem_avg": mem_avg,
@@ -198,11 +220,21 @@ def main() -> None:
         records,
         "Exp2 fan-out (workers reused)",
         [
-            "mechanism", "workers", "round", "min..max", "cpu",
-            "mem_avg", "mem_max", "ok",
+            "mechanism",
+            "workers",
+            "round",
+            "min..max",
+            "cpu",
+            "mem_avg",
+            "mem_max",
+            "ok",
         ],
         rows,
-        note=f"T={T} work/item={WORK} rounds={ROUNDS}",
+        note=(
+            f"T={TASKS_PER_ROUND} "
+            f"work/item={WORK_PER_TASK} "
+            f"rounds={ROUNDS}"
+        ),
     )
 
 
