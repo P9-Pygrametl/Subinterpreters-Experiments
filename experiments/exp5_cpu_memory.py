@@ -19,8 +19,8 @@ import metrics
 ROW_COUNT = 600
 WORK_PER_ROW = 60_000
 
-STEADY_REPS = 5
-SEQUENTIAL_REPS = 5
+STEADY_REPS = 10
+SEQUENTIAL_REPS = 10
 
 WORKER_COUNTS = [1, 2, 4, 8]
 CHUNKSIZE = 10  # Batch tasks per message so IPC overhead is amortized

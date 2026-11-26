@@ -17,7 +17,7 @@ import metrics
 
 TASKS_PER_ROUND = 4000
 WORK_PER_TASK = 2000
-ROUNDS = 5
+ROUNDS = 10
 
 WORKER_COUNTS = [1, 2, 4, 8]
 

@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import metrics
 
 
-REPEATS = 30
+REPEATS = 10
 WORKER_COUNTS = [1, 2, 4, 8]
 
 MP_CONTEXT = mp.get_context("fork")

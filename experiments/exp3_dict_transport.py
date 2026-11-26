@@ -20,7 +20,7 @@ import metrics
 
 
 MESSAGES_PER_RUN = 2000
-REPEATS = 7
+REPEATS = 10
 
 COLUMN_COUNTS = [1, 2, 5, 10, 20, 50]
 VALUE = "x" * 20

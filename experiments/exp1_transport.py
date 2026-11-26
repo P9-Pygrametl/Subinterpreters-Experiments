@@ -17,7 +17,7 @@ import metrics
 
 
 TARGET_BYTES = 80_000_000
-REPEATS = 7
+REPEATS = 10
 
 COMBOS = [
     ("int", "small"),

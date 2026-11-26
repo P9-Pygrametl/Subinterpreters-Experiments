@@ -20,7 +20,7 @@ import metrics
 
 TOTAL_IDS = 1000
 WORK_PER_REQUEST = 4000
-ROUNDS = 5
+ROUNDS = 10
 
 WORKER_COUNTS = [1, 2, 4, 8]
 
